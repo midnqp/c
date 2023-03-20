@@ -7,106 +7,32 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "./lib.h"
+#include "bucket-flush.h"
+#include "lib.h"
 
-int recvmsg_bucket_len = 0;
-char *recvmsg_bucket[1024];
+#define rawmode_printf(...)                                                    \
+  do {                                                                         \
+    disableRawMode(STDIN_FILENO);                                              \
+    printf(__VA_ARGS__);                                                       \
+    fflush(stdout);                                                            \
+    enableRawMode(STDIN_FILENO);                                               \
+  } while (0)
 
-int sendmsg_bucket_len = 0;
-char *sendmsg_bucket[1024];
-
-char input_buffer[1024 * 1024] = {'\0'};
-int input_buffer_len = 1;
-
-char *prompt = "muhammad >>> ";
-#define RAND_MAX_SEC 3
-
-void add_to_recvbucket() {
-  time_t raw;
-  time(&raw);
-  struct tm *timeinfo = localtime(&raw);
-  char *timestr = asctime(timeinfo);
-
-  // timestr has a newline at the end
-  size_t len = strlen(timestr);
-  len--;
-  timestr[len] = '\0';
-  recvmsg_bucket[recvmsg_bucket_len++] = timestr;
-
-  /*printf("(added to bucket)\n");*/
-  /*printf("(new message received)\n");*/
-}
-
-int rand_int(int min, int max) {
-  int r = rand() % (max + 1 - min) + min;
-  return r;
-}
+pthread_t write_msg_thread_id = 0;
+void *write_msg_thread(void *args);
 
 void *receive_msg_thread(void *args) {
-  /*pthread_detach(pthread_self());*/
+  pthread_detach(pthread_self());
+
   for (int i = 0; i < 5; i++) {
     int random = rand_int(1, RAND_MAX_SEC);
     sleep(random);
     add_to_recvbucket();
   }
-  /*pthread_exit(NULL);*/
-}
-
-int flusherrecv_len = 0;
-int flusherrecv_list[1024];
-#define FLUSHER_TIMEOUT 10
-int flusher_timeout_n = 0;
-
-bool arr_has(int arr[], int arrlen, int value) {
-  for (int i = 0; i < arrlen; i++) {
-    if (arr[i] == value)
-      return true;
-  }
-  return false;
-}
-
-char *get_unflushed_from_recvbucket() {
-  for (int i = 0; i < recvmsg_bucket_len; i++) {
-    if (arr_has(flusherrecv_list, flusherrecv_len, i) == false) {
-      flusherrecv_list[flusherrecv_len++] = i;
-      return recvmsg_bucket[i];
-    }
-  }
-  return "";
-}
-
-int flushersent_len = 0;
-int flushersent_list[1024];
-char *get_unflushed_from_sendbucket() {
-  for (int idx = 0; idx < sendmsg_bucket_len; idx++) {
-    if (arr_has(flushersent_list, flushersent_len, idx) == false) {
-      flushersent_list[flushersent_len++] = idx;
-      return sendmsg_bucket[idx];
-    }
-  }
-  return "";
-}
-
-void realloc_str(char **ptr, char *src) {
-  int ptr_len = strlen(*ptr);
-  int src_len = strlen(src);
-  if (src_len > 0) {
-    int total = ptr_len + src_len;
-    if (src[src_len - 1] != '\0')
-      total++;
-    else if (*ptr[ptr_len - 1] != '\0')
-      total++;
-    *ptr = realloc(*ptr, total);
-  }
-}
-
-void strappend(char **ptr, char *src) {
-  realloc_str(ptr, src);
-  strcat(*ptr, src);
 }
 
 void *print_msg_thread(void *args) {
-  /*pthread_detach(pthread_self());*/
+  pthread_detach(pthread_self());
 
   while (1) {
     char *recvmsg = get_unflushed_from_recvbucket();
@@ -132,67 +58,73 @@ void *print_msg_thread(void *args) {
       flushing = true;
     }
 
-    if (flushing == true) {
-		// TODO
-      /*strappend(&result, prompt);*/
-      /*strappend(&result, input_buffer);*/
-	  disableRawMode(STDIN_FILENO);
+    if (flushing == true && write_msg_thread_id) {
+      disableRawMode(STDIN_FILENO);
+      pthread_cancel(write_msg_thread_id);
+
       printf("\33[2K\r");
       printf("%s", result);
       fflush(stdout);
-	  enableRawMode(STDIN_FILENO);
+      enableRawMode(STDIN_FILENO);
       free(result);
+
+      pthread_t T3;
+      pthread_create(&T3, NULL, write_msg_thread, NULL);
     } else {
-      /*printf("system: timing out...%d\n", flusher_timeout_n);*/
-      free(result); // creating/freeing a buffer on each tick
-      /*if (flusher_timeout_n == FLUSHER_TIMEOUT)*/
-        /*break;*/
+      free(result);
       flusher_timeout_n++;
       sleep(1);
     }
   }
 }
 
-void add_to_sendbucket() {
-  sendmsg_bucket[sendmsg_bucket_len++] = input_buffer;
-  input_buffer_len = 0;
-  input_buffer[input_buffer_len] = '\0';
+void disable_raw_mode() {
+  tcsetattr(STDIN_FILENO, TCSAFLUSH, &original_terminal);
 }
 
-void add_to_inputbuffer(char c) {
-  /*if (isprint(c)) {*/
-    input_buffer[input_buffer_len++] = c;
-    input_buffer[input_buffer_len] = '\0';
-  /*}*/
+void enable_raw_mode() {
+  tcgetattr(STDIN_FILENO, &original_terminal);
+  atexit(disable_raw_mode);
+  struct termios raw = original_terminal;
+  raw.c_lflag &= ~(ECHO | ICANON);
+  /*raw.c_oflag &= ~(OPOST);*/
+  tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+}
+
+void *write_msg_thread(void *args) {
+  enableRawMode(STDIN_FILENO);
+  while (1) {
+    char c = editorReadKey(STDIN_FILENO);
+    if (isprint(c)) {
+      add_to_inputbuffer(c);
+      rawmode_printf("%c", c);
+    }
+    if (c == ESC) {
+      printf("pressed esc\n");
+      fflush(stdout);
+      disableRawMode(STDIN_FILENO);
+      break;
+    }
+    if (c == '\n' || c == ENTER) {
+      input_buffer_len = 0;
+      input_buffer[0] = '\0';
+      rawmode_printf("\r\n%s",prompt);
+      continue;
+    }
+  }
 }
 
 int main() {
-  pthread_t thread1, thread2;
-  pthread_create(&thread1, NULL, receive_msg_thread, NULL);
-  pthread_create(&thread2, NULL, print_msg_thread, NULL);
+  pthread_t T1, T2, T3;
+  /*pthread_create(&T1, NULL, receive_msg_thread, NULL);*/
+  /*pthread_create(&T2, NULL, print_msg_thread, NULL);*/
+  /*pthread_create(&T3, NULL, write_msg_thread, NULL);*/
 
   int n_pressed_enter = 0;
   printf("%s", prompt);
   fflush(stdout);
-  enableRawMode(STDIN_FILENO);
-  while (1) {
-    char c = editorReadKey(STDIN_FILENO);
-    add_to_inputbuffer(c);
+  write_msg_thread(NULL);
 
-    switch (c) {
-    case ENTER: // send!
-      add_to_sendbucket();
-      printf("\33[2K\r");
-  		printf("%s", prompt);
-		fflush(stdout);
-      break;
-
-    }
-  }
-
-  /*pthread_join(thread1, NULL);*/
-  /*pthread_join(thread2, NULL);*/
-  pthread_exit(NULL);
-
+  /*pthread_exit(NULL);*/
   return 0;
 }
