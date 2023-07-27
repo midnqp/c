@@ -1,6 +1,0 @@
-[requires]
-jansson/2.14
-libcurl/7.86.0
-
-[generators]
-cmake
