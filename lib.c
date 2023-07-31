@@ -1,56 +1,21 @@
 #include "lib.h"
-
 #include <stddef.h>
-
 #include "curl/curl.h"
 #include "curl/easy.h"
 
-static void** freeable = NULL;
-static int freeable_count = 0;
-
-void dealloc() {
-  for (int i = 0; i < freeable_count; i++) {
-    if (freeable[i] == NULL) continue;
-    log("debug", " dealloc of address %p\n", freeable[i]);
-    free(freeable[i]);
-    freeable[i] = NULL;
-  }
-}
-
-void* __alloc(int len) {
-  if (freeable == NULL) {
-    freeable = calloc(1, sizeof(void*));
-  } else {
-    size_t sz = sizeof(void*);
-    freeable = realloc(freeable, sz + sz * freeable_count);
-  }
-  void* result = malloc(len);
-  log("debug", " alloc of %d bytes, address %p\n", len, result);
-  freeable[freeable_count] = result;
-  freeable_count++;
-  return result;
-};
-
-struct curlstr {
-  char* str;
-  size_t len;
-};
-
-static int _curl_init_once = 0;
-static int _curl_exit_once = 0;
+static int _curl_state = 0; // 1 means inited
 
 void curl_init_once() {
-  if (!_curl_init_once) {
-    _curl_init_once = 1;
+    if (_curl_state != 0) return;
+    _curl_state = 1;
     curl_global_init(CURL_GLOBAL_DEFAULT);
-  }
+  
 }
 
 void curl_exit_once() {
-  if (!_curl_exit_once) {
-    _curl_exit_once = 1;
+    if (_curl_state != 1) return;
+    _curl_state = 0;
     curl_global_cleanup();
-  }
 }
 
 size_t curl_cb(void* p, size_t size, size_t count, struct curlstr* r) {
@@ -94,5 +59,3 @@ char* req_get(char* url) {
 
   return curlres.str;
 }
-
-char* req_post() {}
