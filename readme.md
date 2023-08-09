@@ -7,3 +7,4 @@ The wiki contains a compendium of notes that I made while learning to code in C.
 - **catfacts** gets you facts about cats 🐱
 - **lib** contains interesting concise functions.
 - **main** contains usage examples of all the above functions.
+- [**chatnet-cli**](https://github.com/midnqp/chatnet-cli) is an experimental chat application for the terminal, that leverages a modern asynchronous multiplexing approach to stdin and stdout. (Promoted to a new repository!)
